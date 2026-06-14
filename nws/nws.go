@@ -26,7 +26,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		BaseURL:   "https://api.weather.gov",
-		UserAgent: "nws-cli/0.1 (github.com/tamnd/nws-cli)",
+		UserAgent: "nws-cli/0.1 (tamnd87@gmail.com)",
 		Rate:      100 * time.Millisecond,
 		Retries:   3,
 		Timeout:   15 * time.Second,
@@ -50,27 +50,36 @@ func NewClient(cfg Config) *Client {
 
 // --- Output types ---
 
+// GridPoint is the NWS grid info for a lat/lon coordinate.
+type GridPoint struct {
+	GridID      string `kit:"id" json:"grid_id"`
+	GridX       int    `json:"grid_x"`
+	GridY       int    `json:"grid_y"`
+	City        string `json:"city"`
+	State       string `json:"state"`
+	ForecastURL string `json:"forecast_url"`
+}
+
 // ForecastPeriod is one period in a 7-day or hourly forecast.
 type ForecastPeriod struct {
-	Name             string `json:"name"`
-	ShortForecast    string `json:"short_forecast"`
-	Temperature      int    `json:"temperature"`
-	TempUnit         string `json:"temp_unit"`
-	WindSpeed        string `json:"wind_speed"`
-	WindDirection    string `json:"wind_direction"`
-	IsDaytime        bool   `json:"is_daytime"`
-	StartTime        string `json:"start_time"`
-	DetailedForecast string `json:"detailed_forecast"`
+	Name          string `kit:"id" json:"name"`
+	StartTime     string `json:"start_time"`
+	Temperature   int    `json:"temperature"`
+	TempUnit      string `json:"temp_unit"`
+	WindSpeed     string `json:"wind_speed"`
+	WindDir       string `json:"wind_direction"`
+	ShortForecast string `json:"short_forecast"`
 }
 
 // Alert is one active weather alert.
 type Alert struct {
-	Event       string `json:"event"`
-	Severity    string `json:"severity"`
-	AreaDesc    string `json:"area_desc"`
-	Effective   string `json:"effective"`
-	Expires     string `json:"expires"`
-	Description string `json:"description"`
+	ID       string `kit:"id" json:"id"`
+	Event    string `json:"event"`
+	Severity string `json:"severity"`
+	Area     string `json:"area"`
+	Headline string `json:"headline"`
+	Onset    string `json:"onset"`
+	Expires  string `json:"expires"`
 }
 
 // Station is a weather observation station.
@@ -85,12 +94,17 @@ type Station struct {
 
 type wirePoints struct {
 	Properties struct {
-		CWA      string `json:"cwa"`
+		GridID   string `json:"gridId"`
 		GridX    int    `json:"gridX"`
 		GridY    int    `json:"gridY"`
 		TimeZone string `json:"timeZone"`
-		City     string `json:"city"`
-		State    string `json:"state"`
+		Forecast string `json:"forecast"`
+		RelativeLocation struct {
+			Properties struct {
+				City  string `json:"city"`
+				State string `json:"state"`
+			} `json:"properties"`
+		} `json:"relativeLocation"`
 	} `json:"properties"`
 }
 
@@ -101,15 +115,14 @@ type wireForecast struct {
 }
 
 type wirePeriod struct {
-	Name             string `json:"name"`
-	ShortForecast    string `json:"shortForecast"`
-	DetailedForecast string `json:"detailedForecast"`
-	Temperature      int    `json:"temperature"`
-	TemperatureUnit  string `json:"temperatureUnit"`
-	WindSpeed        string `json:"windSpeed"`
-	WindDirection    string `json:"windDirection"`
-	IsDaytime        bool   `json:"isDaytime"`
-	StartTime        string `json:"startTime"`
+	Name            string `json:"name"`
+	ShortForecast   string `json:"shortForecast"`
+	Temperature     int    `json:"temperature"`
+	TemperatureUnit string `json:"temperatureUnit"`
+	WindSpeed       string `json:"windSpeed"`
+	WindDirection   string `json:"windDirection"`
+	IsDaytime       bool   `json:"isDaytime"`
+	StartTime       string `json:"startTime"`
 }
 
 type wireAlerts struct {
@@ -119,12 +132,13 @@ type wireAlerts struct {
 }
 
 type wireAlert struct {
-	Event       string `json:"event"`
-	Severity    string `json:"severity"`
-	AreaDesc    string `json:"areaDesc"`
-	Effective   string `json:"effective"`
-	Expires     string `json:"expires"`
-	Description string `json:"description"`
+	ID       string `json:"id"`
+	Event    string `json:"event"`
+	Severity string `json:"severity"`
+	AreaDesc string `json:"areaDesc"`
+	Headline string `json:"headline"`
+	Onset    string `json:"onset"`
+	Expires  string `json:"expires"`
 }
 
 type wireStations struct {
@@ -141,30 +155,46 @@ type wireStation struct {
 
 // --- Client methods ---
 
-// Forecast returns 7-day (or hourly) forecast periods for a lat/lon.
-// It first resolves the NWS grid via /points, then fetches /gridpoints/forecast.
-func (c *Client) Forecast(ctx context.Context, lat, lon float64, hourly bool) ([]ForecastPeriod, error) {
-	// Step 1: resolve lat/lon to office + grid coords.
-	pointsURL := fmt.Sprintf("%s/points/%.4f,%.4f", c.cfg.BaseURL, lat, lon)
-	body, err := c.get(ctx, pointsURL)
+// Points returns grid info for a lat/lon coordinate.
+func (c *Client) Points(ctx context.Context, lat, lon string) (GridPoint, error) {
+	u := fmt.Sprintf("%s/points/%s,%s", c.cfg.BaseURL, lat, lon)
+	body, err := c.get(ctx, u)
 	if err != nil {
-		return nil, fmt.Errorf("points lookup: %w", err)
+		return GridPoint{}, fmt.Errorf("points lookup: %w", err)
 	}
 	var pts wirePoints
 	if err := json.Unmarshal(body, &pts); err != nil {
-		return nil, fmt.Errorf("decode points: %w", err)
+		return GridPoint{}, fmt.Errorf("decode points: %w", err)
 	}
 	p := pts.Properties
-	if p.CWA == "" {
-		return nil, fmt.Errorf("no grid office in response (lat=%.4f lon=%.4f)", lat, lon)
+	if p.GridID == "" {
+		return GridPoint{}, fmt.Errorf("no grid office in response (lat=%s lon=%s)", lat, lon)
+	}
+	return GridPoint{
+		GridID:      p.GridID,
+		GridX:       p.GridX,
+		GridY:       p.GridY,
+		City:        p.RelativeLocation.Properties.City,
+		State:       p.RelativeLocation.Properties.State,
+		ForecastURL: p.Forecast,
+	}, nil
+}
+
+// Forecast returns 7-day (or hourly) forecast periods for a lat/lon.
+// It first resolves the NWS grid via /points, then fetches /gridpoints/forecast.
+func (c *Client) Forecast(ctx context.Context, lat, lon string, hourly bool) ([]ForecastPeriod, error) {
+	// Step 1: resolve lat/lon to office + grid coords.
+	gp, err := c.Points(ctx, lat, lon)
+	if err != nil {
+		return nil, err
 	}
 
 	// Step 2: fetch forecast from the grid.
-	fURL := fmt.Sprintf("%s/gridpoints/%s/%d,%d/forecast", c.cfg.BaseURL, p.CWA, p.GridX, p.GridY)
+	fURL := fmt.Sprintf("%s/gridpoints/%s/%d,%d/forecast", c.cfg.BaseURL, gp.GridID, gp.GridX, gp.GridY)
 	if hourly {
 		fURL += "/hourly"
 	}
-	body, err = c.get(ctx, fURL)
+	body, err := c.get(ctx, fURL)
 	if err != nil {
 		return nil, fmt.Errorf("forecast fetch: %w", err)
 	}
@@ -176,15 +206,13 @@ func (c *Client) Forecast(ctx context.Context, lat, lon float64, hourly bool) ([
 	out := make([]ForecastPeriod, 0, len(wf.Properties.Periods))
 	for _, wp := range wf.Properties.Periods {
 		out = append(out, ForecastPeriod{
-			Name:             wp.Name,
-			ShortForecast:    wp.ShortForecast,
-			Temperature:      wp.Temperature,
-			TempUnit:         wp.TemperatureUnit,
-			WindSpeed:        wp.WindSpeed,
-			WindDirection:    wp.WindDirection,
-			IsDaytime:        wp.IsDaytime,
-			StartTime:        wp.StartTime,
-			DetailedForecast: wp.DetailedForecast,
+			Name:          wp.Name,
+			StartTime:     wp.StartTime,
+			Temperature:   wp.Temperature,
+			TempUnit:      wp.TemperatureUnit,
+			WindSpeed:     wp.WindSpeed,
+			WindDir:       wp.WindDirection,
+			ShortForecast: wp.ShortForecast,
 		})
 	}
 	return out, nil
@@ -208,12 +236,13 @@ func (c *Client) Alerts(ctx context.Context, state string, limit int) ([]Alert, 
 		}
 		a := f.Properties
 		out = append(out, Alert{
-			Event:       a.Event,
-			Severity:    a.Severity,
-			AreaDesc:    a.AreaDesc,
-			Effective:   a.Effective,
-			Expires:     a.Expires,
-			Description: a.Description,
+			ID:       a.ID,
+			Event:    a.Event,
+			Severity: a.Severity,
+			Area:     a.AreaDesc,
+			Headline: a.Headline,
+			Onset:    a.Onset,
+			Expires:  a.Expires,
 		})
 	}
 	return out, nil
