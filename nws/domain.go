@@ -45,6 +45,10 @@ tools. No API key needed.`,
 func (Domain) Register(app *kit.App) {
 	app.SetClient(newClient)
 
+	// points: grid info for a lat/lon coordinate.
+	kit.Handle(app, kit.OpMeta{Name: "points", Group: "weather",
+		Summary: "Get NWS grid info for a lat/lon coordinate"}, doPoints)
+
 	// forecast: 7-day or hourly forecast for a lat/lon.
 	kit.Handle(app, kit.OpMeta{Name: "forecast", Group: "weather", List: true,
 		Summary: "7-day (or hourly) forecast for a location"}, doForecast)
@@ -78,9 +82,15 @@ func newClient(_ context.Context, cfg kit.Config) (any, error) {
 
 // --- inputs ---
 
+type pointsIn struct {
+	Lat    string  `kit:"flag" help:"latitude (e.g. 40.7128)"`
+	Lon    string  `kit:"flag" help:"longitude (e.g. -74.0060)"`
+	Client *Client `kit:"inject"`
+}
+
 type forecastIn struct {
-	Lat    float64 `kit:"flag" help:"latitude"`
-	Lon    float64 `kit:"flag" help:"longitude"`
+	Lat    string  `kit:"flag" help:"latitude (e.g. 40.7128)"`
+	Lon    string  `kit:"flag" help:"longitude (e.g. -74.0060)"`
 	Hourly bool    `kit:"flag" help:"return hourly periods instead of 7-day"`
 	Client *Client `kit:"inject"`
 }
@@ -99,7 +109,21 @@ type stationsIn struct {
 
 // --- handlers ---
 
+func doPoints(ctx context.Context, in pointsIn, emit func(GridPoint) error) error {
+	if in.Lat == "" || in.Lon == "" {
+		return errs.Usage("--lat and --lon are required (e.g. nws points --lat 40.7128 --lon -74.0060)")
+	}
+	gp, err := in.Client.Points(ctx, in.Lat, in.Lon)
+	if err != nil {
+		return err
+	}
+	return emit(gp)
+}
+
 func doForecast(ctx context.Context, in forecastIn, emit func(ForecastPeriod) error) error {
+	if in.Lat == "" || in.Lon == "" {
+		return errs.Usage("--lat and --lon are required (e.g. nws forecast --lat 40.7128 --lon -74.0060)")
+	}
 	periods, err := in.Client.Forecast(ctx, in.Lat, in.Lon, in.Hourly)
 	if err != nil {
 		return err
@@ -114,7 +138,7 @@ func doForecast(ctx context.Context, in forecastIn, emit func(ForecastPeriod) er
 
 func doAlerts(ctx context.Context, in alertsIn, emit func(Alert) error) error {
 	if in.State == "" {
-		return errs.Usage("--state is required (e.g. --state TX)")
+		return errs.Usage("state is required (e.g. nws alerts TX)")
 	}
 	limit := in.Limit
 	if limit == 0 {

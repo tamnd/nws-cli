@@ -11,15 +11,20 @@ import (
 	"github.com/tamnd/nws-cli/nws"
 )
 
-// pointsResp is a minimal /points response.
+// pointsResp is a minimal /points response matching the real NWS API shape.
 const pointsResp = `{
   "properties": {
-    "cwa": "TOP",
+    "gridId": "TOP",
     "gridX": 32,
     "gridY": 81,
     "timeZone": "America/Chicago",
-    "city": "Montrose",
-    "state": "KS"
+    "forecast": "https://api.weather.gov/gridpoints/TOP/32,81/forecast",
+    "relativeLocation": {
+      "properties": {
+        "city": "Montrose",
+        "state": "KS"
+      }
+    }
   }
 }`
 
@@ -30,7 +35,6 @@ const forecastResp = `{
       {
         "name": "This Afternoon",
         "shortForecast": "Sunny",
-        "detailedForecast": "Sunny, with a high near 73.",
         "temperature": 73,
         "temperatureUnit": "F",
         "windSpeed": "5 mph",
@@ -42,17 +46,18 @@ const forecastResp = `{
   }
 }`
 
-// alertsResp is a minimal /alerts/active response.
+// alertsResp is a minimal /alerts/active response with the fields the spec requires.
 const alertsResp = `{
   "features": [
     {
       "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.TEST",
         "event": "Rip Current Statement",
         "severity": "Moderate",
         "areaDesc": "Coastal Waters",
-        "effective": "2026-06-14T12:00:00",
-        "expires": "2026-06-15T06:00:00",
-        "description": "Strong rip currents expected."
+        "headline": "Rip Current Statement issued for Coastal Waters",
+        "onset": "2026-06-14T12:00:00",
+        "expires": "2026-06-15T06:00:00"
       }
     }
   ]
@@ -93,6 +98,41 @@ func newRouteServer(t *testing.T, routes map[string]string) *httptest.Server {
 	}))
 }
 
+func TestPoints(t *testing.T) {
+	srv := newRouteServer(t, map[string]string{
+		"/points/": pointsResp,
+	})
+	defer srv.Close()
+
+	cfg := nws.DefaultConfig()
+	cfg.BaseURL = srv.URL
+	cfg.Rate = 0
+	c := nws.NewClient(cfg)
+
+	gp, err := c.Points(context.Background(), "39.7456", "-97.0892")
+	if err != nil {
+		t.Fatalf("Points: %v", err)
+	}
+	if gp.GridID != "TOP" {
+		t.Errorf("GridID = %q, want TOP", gp.GridID)
+	}
+	if gp.GridX != 32 {
+		t.Errorf("GridX = %d, want 32", gp.GridX)
+	}
+	if gp.GridY != 81 {
+		t.Errorf("GridY = %d, want 81", gp.GridY)
+	}
+	if gp.City != "Montrose" {
+		t.Errorf("City = %q, want Montrose", gp.City)
+	}
+	if gp.State != "KS" {
+		t.Errorf("State = %q, want KS", gp.State)
+	}
+	if gp.ForecastURL == "" {
+		t.Error("ForecastURL should not be empty")
+	}
+}
+
 func TestForecast(t *testing.T) {
 	srv := newRouteServer(t, map[string]string{
 		"/points/":     pointsResp,
@@ -105,7 +145,7 @@ func TestForecast(t *testing.T) {
 	cfg.Rate = 0
 	c := nws.NewClient(cfg)
 
-	periods, err := c.Forecast(context.Background(), 39.7456, -97.0892, false)
+	periods, err := c.Forecast(context.Background(), "39.7456", "-97.0892", false)
 	if err != nil {
 		t.Fatalf("Forecast: %v", err)
 	}
@@ -122,11 +162,11 @@ func TestForecast(t *testing.T) {
 	if p.TempUnit != "F" {
 		t.Errorf("TempUnit = %q, want F", p.TempUnit)
 	}
-	if !p.IsDaytime {
-		t.Error("IsDaytime = false, want true")
-	}
 	if p.ShortForecast != "Sunny" {
 		t.Errorf("ShortForecast = %q, want Sunny", p.ShortForecast)
+	}
+	if p.WindSpeed != "5 mph" {
+		t.Errorf("WindSpeed = %q, want 5 mph", p.WindSpeed)
 	}
 }
 
@@ -153,7 +193,7 @@ func TestForecastHourly(t *testing.T) {
 	cfg.Rate = 0
 	c := nws.NewClient(cfg)
 
-	_, err := c.Forecast(context.Background(), 39.7456, -97.0892, true)
+	_, err := c.Forecast(context.Background(), "39.7456", "-97.0892", true)
 	if err != nil {
 		t.Fatalf("Forecast hourly: %v", err)
 	}
@@ -181,11 +221,26 @@ func TestAlerts(t *testing.T) {
 		t.Fatalf("got %d alerts, want 1", len(alerts))
 	}
 	a := alerts[0]
+	if a.ID != "urn:oid:2.49.0.1.840.0.TEST" {
+		t.Errorf("ID = %q", a.ID)
+	}
 	if a.Event != "Rip Current Statement" {
 		t.Errorf("Event = %q, want %q", a.Event, "Rip Current Statement")
 	}
 	if a.Severity != "Moderate" {
-		t.Errorf("Severity = %q, want %q", a.Severity, "Moderate")
+		t.Errorf("Severity = %q, want Moderate", a.Severity)
+	}
+	if a.Area != "Coastal Waters" {
+		t.Errorf("Area = %q, want Coastal Waters", a.Area)
+	}
+	if a.Headline == "" {
+		t.Error("Headline should not be empty")
+	}
+	if a.Onset == "" {
+		t.Error("Onset should not be empty")
+	}
+	if a.Expires == "" {
+		t.Error("Expires should not be empty")
 	}
 }
 
@@ -194,6 +249,7 @@ func TestAlertsLimit(t *testing.T) {
 	for i := range feats {
 		feats[i] = map[string]any{
 			"properties": map[string]any{
+				"id":       "urn:oid:test." + string(rune('0'+i)),
 				"event":    "Test",
 				"severity": "Minor",
 			},
