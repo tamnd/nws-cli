@@ -94,11 +94,11 @@ type Station struct {
 
 type wirePoints struct {
 	Properties struct {
-		GridID   string `json:"gridId"`
-		GridX    int    `json:"gridX"`
-		GridY    int    `json:"gridY"`
-		TimeZone string `json:"timeZone"`
-		Forecast string `json:"forecast"`
+		GridID           string `json:"gridId"`
+		GridX            int    `json:"gridX"`
+		GridY            int    `json:"gridY"`
+		TimeZone         string `json:"timeZone"`
+		Forecast         string `json:"forecast"`
 		RelativeLocation struct {
 			Properties struct {
 				City  string `json:"city"`
