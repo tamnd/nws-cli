@@ -1,0 +1,10 @@
+title       = "nws"
+baseURL     = "https://nws-cli.tamnd.com/"
+description = "A command line for nws."
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/nws-cli"
